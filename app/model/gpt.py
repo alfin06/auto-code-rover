@@ -68,13 +68,22 @@ class OpenaiModel(Model):
         Check API key, and initialize OpenAI client.
         """
         if self.client is None:
-            key = self.check_api_key()
-            self.client = OpenAI(api_key=key)
+            # Fallback to OPENAI_API_KEY if OPENAI_KEY is unset
+            key = os.getenv("OPENAI_KEY") or os.getenv("OPENAI_API_KEY")
+            if not key:
+                print("Please set the OPENAI_KEY or OPENAI_API_KEY env var")
+                sys.exit(1)
+            
+            base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+            if base_url:
+                self.client = OpenAI(api_key=key, base_url=base_url)
+            else:
+                self.client = OpenAI(api_key=key)
 
     def check_api_key(self) -> str:
-        key = os.getenv("OPENAI_KEY")
+        key = os.getenv("OPENAI_KEY") or os.getenv("OPENAI_API_KEY")
         if not key:
-            print("Please set the OPENAI_KEY env var")
+            print("Please set the OPENAI_KEY or OPENAI_API_KEY env var")
             sys.exit(1)
         return key
 
@@ -407,3 +416,15 @@ class Gpt4_0613(OpenaiModel):
 class Gpt4o_mini_20240718(OpenaiModel):
     def __init__(self):
         super().__init__("gpt-4o-mini-2024-07-18", 4096, 0.00000015, 0.0000006)
+
+
+class TuziGpt41Mini(OpenaiModel):
+    def __init__(self):
+        super().__init__(
+            "tuzi-deepseek-v3.2/gpt-4.1-mini",
+            4096,
+            0.00000015,
+            0.0000006,
+            parallel_tool_call=True,
+        )
+        self.note = "Custom Tuzi proxy model endpoint."

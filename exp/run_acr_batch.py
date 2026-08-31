@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
 Batch Patch Generator using AutoCodeRover.
-Iterates over SWE issue artifacts, checks out base_sha, runs ACR,
+Iterates over SWE issue artifacts, checks out base_sha, executes ACR local-issue,
 and writes generated patches to output_dir/result_<issue_id>/generated_patch.diff.
+
+How to run:
+python run_acr_batch.py \
+  --artifacts-dir ./artifacts \
+  --output-dir ./acr_patches \
+  --acr-root /root/auto-code-rover \
+  --model gpt-4o-mini-2024-07-18
 """
 
 import os
@@ -66,7 +73,7 @@ def solve_single_issue_acr(
     if workspace_path.exists():
         shutil.rmtree(workspace_path)
 
-    # Temporary prompt file for ACR
+    # Write problem statement text file for ACR
     prompt_file = patch_target_dir / "problem_statement.txt"
     prompt_file.write_text(problem_statement, encoding="utf-8")
 
@@ -81,37 +88,41 @@ def solve_single_issue_acr(
         if base_sha:
             run_cmd(["git", "checkout", base_sha], cwd=workspace_path)
 
-        # 3. Construct ACR CLI invocation
-        # ACR takes --model, --repo-path, and the issue statement file / task
-        acr_run_script = acr_root_dir / "run.py"
+        # 3. Construct ACR CLI invocation using local-issue
+        acr_entry = acr_root_dir / "ACR.py"
         acr_output_dir = patch_target_dir / "acr_output"
         acr_output_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = [
             sys.executable,
-            str(acr_run_script),
+            str(acr_entry),
+            "local-issue",
             "--model", model_name,
-            "--repo-path", str(workspace_path.resolve()),
+            "--local-repo", str(workspace_path.resolve()),
             "--issue-file", str(prompt_file.resolve()),
             "--output-dir", str(acr_output_dir.resolve()),
+            "--task-id", issue_folder,
         ]
 
-        print(f"[*] Launching AutoCodeRover...")
-        run_res = run_cmd(cmd, cwd=acr_root_dir)
+        print(f"[*] Launching AutoCodeRover (local-issue)...")
+        acr_env = os.environ.copy()
+        acr_env["PYTHONPATH"] = f"{str(acr_root_dir)}:{acr_env.get('PYTHONPATH', '')}"
 
-        # Write execution logs
+        run_res = run_cmd(cmd, cwd=acr_root_dir, env=acr_env)
+
+        # Save run log
         log_content = f"STDOUT:\n{run_res.stdout}\n\nSTDERR:\n{run_res.stderr}"
         log_file_path.write_text(log_content, encoding="utf-8")
 
-        # 4. Extract Git Diff or ACR output patch
+        # 4. Extract Git Diff or ACR generated patch file
         diff_res = run_cmd(["git", "diff"], cwd=workspace_path)
         patch_text = diff_res.stdout.strip()
 
-        # If ACR wrote patch directly to output directory, fallback to it
+        # Check ACR output directory if git diff was empty
         if not patch_text:
-            acr_patches = list(acr_output_dir.glob("*.patch")) + list(acr_output_dir.glob("*.diff"))
-            if acr_patches:
-                patch_text = acr_patches[0].read_text(encoding="utf-8").strip()
+            found_patches = list(acr_output_dir.rglob("*.patch")) + list(acr_output_dir.rglob("*.diff"))
+            if found_patches:
+                patch_text = found_patches[0].read_text(encoding="utf-8").strip()
 
         if patch_text:
             patch_file_path.write_text(patch_text + "\n", encoding="utf-8")
@@ -134,8 +145,8 @@ def main():
     parser.add_argument("--artifacts-dir", type=Path, required=True, help="Directory with issue artifact folders.")
     parser.add_argument("--output-dir", type=Path, default=Path("./acr_patches"), help="Output directory for diffs.")
     parser.add_argument("--repos-cache", type=Path, default=Path("./.acr_cache"), help="Temporary workspace cache.")
-    parser.add_argument("--acr-root", type=Path, required=True, help="Path to cloned auto-code-rover repository.")
-    parser.add_argument("--model", type=str, default=os.getenv("LLM_MODEL", "gpt-4.1-mini"))
+    parser.add_argument("--acr-root", type=Path, default=Path("/root/auto-code-rover"), help="Path to auto-code-rover repo.")
+    parser.add_argument("--model", type=str, default="gpt-4o-mini-2024-07-18", help="ACR model name.")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
